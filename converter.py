@@ -7,7 +7,8 @@ from lxml import html
 import urllib.parse
 
 INPUT_FILE = "problem.txt"
-JSON_OUTPUT = "problems.json"
+RELEASES_INDEX = "releases/index.json"
+PROBLEMS_PER_FILE = 100
 
 def extract_info(html_content, field):
     tree = html.fromstring(html_content)
@@ -27,7 +28,7 @@ def debug_extract_info(html_content, field):
     print(f"DEBUG: Extracting {field}: '{result}'")
     return result
 
-def generate_problem(input_file, json_output):
+def generate_problem(input_file, problem_count):
     with open(input_file, 'r') as f:
         url = f.readline().strip()
 
@@ -91,39 +92,69 @@ def generate_problem(input_file, json_output):
                 }
                 problem_data["analysis"]["candidates"].append(candidate)
 
-    # Add problem data to JSON file
-    with open(json_output, 'r+') as f:
+    return problem_data
+
+def update_releases_index(problem_count):
+    with open(RELEASES_INDEX, 'r+') as f:
         data = json.load(f)
-        data["problems"].append(problem_data)
-        f.seek(0)
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.truncate()
-
-def main():
-    global INPUT_FILE  # グローバル変数として宣言
-
-    # Initialize JSON file if it doesn't exist
-    if not os.path.exists(JSON_OUTPUT):
-        with open(JSON_OUTPUT, 'w') as f:
-            json.dump({"problems": []}, f)
-
-    # Process problems
-    counter = 1
-    while os.path.exists(INPUT_FILE):
-        generate_problem(INPUT_FILE, JSON_OUTPUT)
-        counter += 1
-        INPUT_FILE = f"problem_{counter}.txt"
-
-    # Update final problem count and last updated timestamp
-    with open(JSON_OUTPUT, 'r+') as f:
-        data = json.load(f)
-        data["count"] = len(data["problems"])
+        file_index = (problem_count - 1) // PROBLEMS_PER_FILE
+        filename = f"problems_{file_index * PROBLEMS_PER_FILE + 1}_{(file_index + 1) * PROBLEMS_PER_FILE}.json"
+        
+        if file_index >= len(data["problem_files"]):
+            data["problem_files"].append({"filename": filename})
+        
         data["last_updated"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         f.seek(0)
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.truncate()
+    
+    return filename
 
-    print(f"JSONファイルを更新しました: {JSON_OUTPUT}")
+def update_or_create_problem_file(filename, new_problems):
+    file_path = f"releases/{filename}"
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        existing_problems = data.get("problems", [])
+        
+        # Update existing problems or add new ones
+        problem_dict = {p["id"]: p for p in existing_problems}
+        for new_problem in new_problems:
+            problem_dict[new_problem["id"]] = new_problem
+        
+        updated_problems = list(problem_dict.values())
+    else:
+        updated_problems = new_problems
+
+    with open(file_path, 'w') as f:
+        json.dump({"problems": updated_problems, "count": len(updated_problems), "last_updated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}, f, ensure_ascii=False, indent=2)
+
+def main():
+    global INPUT_FILE
+
+    problem_count = 0
+    current_file = None
+    current_problems = []
+
+    while os.path.exists(INPUT_FILE):
+        problem_data = generate_problem(INPUT_FILE, problem_count + 1)
+        current_problems.append(problem_data)
+        problem_count += 1
+
+        if problem_count % PROBLEMS_PER_FILE == 0:
+            output_file = update_releases_index(problem_count)
+            update_or_create_problem_file(output_file, current_problems)
+            current_problems = []
+
+        INPUT_FILE = f"problem_{problem_count + 1}.txt"
+
+    if current_problems:
+        output_file = update_releases_index(problem_count)
+        update_or_create_problem_file(output_file, current_problems)
+
+    print(f"問題数: {problem_count}")
+    print("releases/index.json を更新しました")
+    print(f"releases/{output_file} を更新しました")
     print("処理が完了しました。")
 
 if __name__ == "__main__":
